@@ -1,0 +1,11 @@
+# CUDA files
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+
+# Files not necesarry in repo
+Buddy_Compression_Enabling_Larger_Memory_for_Deep_Learning_and_HPC_Workloads_on_GPUs.pdf
+rodinia_3.1/
