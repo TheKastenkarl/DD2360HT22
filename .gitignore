@@ -9,7 +9,11 @@
 # Files not necesarry in repo
 Buddy_Compression_Enabling_Larger_Memory_for_Deep_Learning_and_HPC_Workloads_on_GPUs.pdf
 rodinia_3.1/
+CUDA-2DGrids-Markidis.pdf
 
 # Temporary Word files
 ~$*.doc*
 *.tmp
+
+# VS Code
+.vscode/
