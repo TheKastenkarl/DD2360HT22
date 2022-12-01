@@ -3,24 +3,85 @@
 #include <random>
 
 #define NUM_BINS 4096
+#define MAX_VAL 127
+#define DEBUG 0
+#define SHARED_MEM 0
+
+void histogram_cpu(unsigned int *input, unsigned int *bins,
+                   unsigned int num_elements, unsigned int num_bins) {
+    // Set array elements to zero
+    memset(bins, 0, num_bins * sizeof(*bins));
+
+    // Count array elements
+    for (int i = 0; i < num_elements; ++i) {
+        unsigned int num = input[i];
+        if (bins[num] < MAX_VAL) {
+            bins[num] += 1;
+        }
+    }
+}
 
 __global__ void histogram_kernel(unsigned int *input, unsigned int *bins,
-                                 unsigned int num_elements,
-                                 unsigned int num_bins) {
+                                 unsigned int num_elements, unsigned int num_bins) {
     //@@ Insert code below to compute histogram of input using shared memory and atomics
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_elements) return;
 
-    bins[input[idx]] += 1;
+    #if SHARED_MEM
+    // Each thread block creates its own shared histogram, stores in a shared variable, and copies the result to the global variable
+    // Shared variable
+    __shared__ unsigned int s_bins[NUM_BINS];
+
+    // Initaliaze shared histogram to zero
+    if (blockDim.x < num_bins) { // each thread must potentially set more than one location to zero
+        for (int i = threadIdx.x; i < num_bins; i += blockDim.x) {
+            if (i < num_bins) {
+                s_bins[i] = 0;
+            }
+        }
+    } else { // each thread must set max. one location to zero
+        if (threadIdx.x < num_bins) {
+            s_bins[threadIdx.x] = 0;
+        }
+    }
+    // synchronize all threads of the block
+    __syncthreads();
+
+
+    // update shared histogram of this thread block
+    if (idx < num_elements) {
+        atomicAdd(&(s_bins[input[idx]]), 1);
+    }
+    // synchronize all threads of the block
+    __syncthreads();
+
+
+    // Add entries of shared histogram to global histogram
+    if (blockDim.x < num_bins) { // each thread must potentially copy more than one location
+        for (int i = threadIdx.x; i < num_bins; i += blockDim.x) {
+            if (i < num_bins) {
+                atomicAdd(&(bins[i]), s_bins[i]);
+            }
+        }
+    } else { // each thread must only copy max. one location
+        if (threadIdx.x < num_bins) {
+            atomicAdd(&(bins[threadIdx.x]), s_bins[threadIdx.x]);
+        }
+    }
+
+    #else
+    // Directly write to global memory
+    if (idx >= num_elements) return;
+    atomicAdd(&bins[input[idx]], 1);
+    #endif
 }
 
 __global__ void convert_kernel(unsigned int *bins, unsigned int num_bins) {
-    //@@ Insert code below to clean up bins that saturate at 127
+    //@@ Insert code below to clean up bins that saturate at MAX_VAL
     const int bin = blockIdx.x * blockDim.x + threadIdx.x;
     if (bin >= num_bins) return;
 
-    if (bins[bin] > 127) {
-        bins[bin] = 127;
+    if (bins[bin] > MAX_VAL) {
+        bins[bin] = MAX_VAL;
     }
 }
 
@@ -42,16 +103,15 @@ int main(int argc, char **argv) {
     resultRef = (unsigned int*) malloc(NUM_BINS * sizeof(unsigned int));
 
     //@@ Insert code below to initialize hostInput to random numbers whose values range from 0 to (NUM_BINS - 1)
-    //@@ Insert code below to create reference result in CPU
-    // rand() % (max_number + 1 - minimum_number) + minimum_number
-    memset(resultRef, 0, NUM_BINS*sizeof(*resultRef)); // Set array elements to zero
     for (int i = 0; i < inputLength; ++i) {
-        unsigned int randomNumber = rand() % NUM_BINS;
-        hostInput[i] = randomNumber;
-        if (resultRef[randomNumber] < 127) {
-            resultRef[randomNumber] += 1;
-        }
+        hostInput[i] = rand() % NUM_BINS; // Formula: rand() % (max_number + 1 - minimum_number) + minimum_number
+        #if DEBUG
+        printf("hostInput[%d] =  %d\n", i, hostInput[i]);
+        #endif
     }
+
+    //@@ Insert code below to create reference result in CPU
+    histogram_cpu(hostInput, resultRef, inputLength, NUM_BINS);
 
     //@@ Insert code below to allocate GPU memory here
     cudaMalloc(&deviceInput, inputLength * sizeof(unsigned int));
@@ -82,12 +142,14 @@ int main(int argc, char **argv) {
 
     //@@ Insert code below to compare the output with the reference
     int equality = 1;
-    for (int i = 0; i < inputLength; ++i) {
-        //printf("CPU element: %f\n", resultRef[i]);
-        //printf("GPU element: %f\n", hostBins[i]);
+    for (int i = 0; i < NUM_BINS; ++i) {
+        #if DEBUG
+        printf("resultRef[%d] = %d\n", i, resultRef[i]);
+        printf("hostBins[%d] =  %d\n", i, hostBins[i]);
+        #endif
         if (hostBins[i] != resultRef[i]) {
             equality = 0;
-            break;
+            //break;
         }
     }
     if (equality == 1) {
@@ -95,6 +157,26 @@ int main(int argc, char **argv) {
     } else {
         printf("CPU and GPU results are NOT equal.\n");
     }
+
+    // Write histogram to file
+    FILE *fptr;
+    fptr = fopen("./histogram.txt","w+");
+    if (fptr == NULL) {
+        printf("Error!");   
+        exit(1);             
+    }
+    for (int i = 0; i < NUM_BINS; ++i) {
+        fprintf(fptr, "%d\n", hostBins[i]);
+    }
+    fclose(fptr);
+
+   FILE *fp;
+
+   fp = fopen("./test.txt", "w+");
+   fprintf(fp, "This is testing for fprintf...\n");
+   fprintf(fp, "This is testing for fprintf... %d \n", 10);
+   fputs("This is testing for fputs...\n", fp);
+   fclose(fp);
 
     //@@ Free the GPU memory here
     cudaFree(deviceInput);
